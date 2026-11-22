@@ -3,9 +3,13 @@ services:
     name: vehdetect-ai
     runtime: python
     buildCommand: pip install -r Backend/requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT Backend.app:app
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120 Backend.app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: KERAS_BACKEND
         value: torch
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"

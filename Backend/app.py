@@ -2,6 +2,7 @@ from pathlib import Path
 import io
 import json
 import os
+import gc
 
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
@@ -11,14 +12,26 @@ from PIL import Image, ImageOps
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = (BASE_DIR.parent / "Frontend") if (BASE_DIR.parent / "Frontend").exists() else (BASE_DIR.parent / "frontend")
 
-# Configure Keras backend & cache dirs
+# Configure Keras backend, single-threaded execution & memory limits
 os.environ.setdefault("KERAS_BACKEND", "torch")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 keras_home = BASE_DIR.parent / ".keras"
 os.environ.setdefault("KERAS_HOME", str(keras_home))
 os.environ.setdefault("MPLCONFIGDIR", str(keras_home / "mpl"))
 
-import keras
 import torch
+torch.set_num_threads(1)
+try:
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
+import keras
 
 MODEL_PATH = BASE_DIR / "efficientnetb0_cardd_keras3.keras"
 SETTINGS_PATH = BASE_DIR / "settings.json"
@@ -79,12 +92,18 @@ with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
 CLASS_NAMES = settings["classes"]
 THRESHOLDS = settings["thresholds"]
 
-print("Loading EfficientNetB0 CarDD damage detection model...")
-model = keras.models.load_model(str(MODEL_PATH), compile=False)
+_model = None
 
-print("MODEL LOADED SUCCESSFULLY")
-print("Input shape:", model.input_shape)
-print("Output shape:", model.output_shape)
+def get_model():
+    global _model
+    if _model is None:
+        print("Loading EfficientNetB0 CarDD damage detection model...")
+        _model = keras.models.load_model(str(MODEL_PATH), compile=False)
+        print("MODEL LOADED SUCCESSFULLY")
+        print("Input shape:", _model.input_shape)
+        print("Output shape:", _model.output_shape)
+    return _model
+
 
 ALLOWED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".jfif", ".bmp", ".tiff", ".tif", ".gif", ".heic", ".heif"
@@ -103,10 +122,15 @@ def frontend_files(filename):
 
 @app.route("/health")
 def health():
+    try:
+        model = get_model()
+        loaded = model is not None
+    except Exception as e:
+        loaded = False
     return jsonify({
         "status": "healthy",
         "message": "VehDetect AI backend is running",
-        "model_loaded": True,
+        "model_loaded": loaded,
         "classes": CLASS_NAMES
     })
 
@@ -152,6 +176,7 @@ def predict():
         image_array = np.asarray(image, dtype=np.float32)
         image_batch = np.expand_dims(image_array, axis=0)
 
+        model = get_model()
         with torch.no_grad():
             raw_scores = model({"image": image_batch}, training=False).detach().cpu().numpy()[0]
         scores = [float(x) for x in raw_scores]
@@ -165,6 +190,10 @@ def predict():
                 "threshold": threshold,
                 "detected": score >= threshold
             })
+
+        # Memory cleanup for low-RAM cloud instances
+        del image_array, image_batch, raw_scores
+        gc.collect()
 
         return jsonify({
             "message": "Prediction completed successfully",
@@ -183,4 +212,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     host = os.environ.get("HOST", "0.0.0.0")
     print(f"Starting VehDetect server on http://{host}:{port}")
+    get_model()
     app.run(host=host, port=port, debug=False)
