@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: vehdetect-ai
+    runtime: python
+    buildCommand: pip install -r Backend/requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT Backend.app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: KERAS_BACKEND
+        value: torch

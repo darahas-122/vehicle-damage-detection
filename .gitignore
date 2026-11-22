@@ -1,0 +1,26 @@
+# Python & Virtual Environments
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Caches & Keys
+.keras/
+.pytest_cache/
+id_ed25519
+id_ed25519.pub
+cloudflared.exe
+deployment_url.txt
+node_modules/
+
+# Extra/Old Model files (only efficientnetb0_cardd_keras3.keras is used)
+Backend/efficientnetb0_cardd_best.keras
+Backend/efficientnetb0_cardd_final.keras
+Backend/efficientnetb0_cardd_render.keras
+
+# Temporary files
+*.tmp
+check_output.txt
+model_check_log.txt
+model_status.txt
