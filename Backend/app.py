@@ -12,8 +12,7 @@ from PIL import Image, ImageOps
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = (BASE_DIR.parent / "Frontend") if (BASE_DIR.parent / "Frontend").exists() else (BASE_DIR.parent / "frontend")
 
-# Configure Keras backend, single-threaded execution & memory limits
-os.environ.setdefault("KERAS_BACKEND", "torch")
+# Configure single-thread limits for minimum memory footprint
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -31,9 +30,8 @@ try:
 except Exception:
     pass
 
-import keras
-
-MODEL_PATH = BASE_DIR / "efficientnetb0_cardd_keras3.keras"
+TORCHSCRIPT_MODEL_PATH = BASE_DIR / "model.torchscript.pt"
+KERAS3_MODEL_PATH = BASE_DIR / "efficientnetb0_cardd_keras3.keras"
 SETTINGS_PATH = BASE_DIR / "settings.json"
 
 app = Flask(__name__)
@@ -93,15 +91,24 @@ CLASS_NAMES = settings["classes"]
 THRESHOLDS = settings["thresholds"]
 
 _model = None
+_model_type = None
 
 def get_model():
-    global _model
+    global _model, _model_type
     if _model is None:
-        print("Loading EfficientNetB0 CarDD damage detection model...")
-        _model = keras.models.load_model(str(MODEL_PATH), compile=False)
-        print("MODEL LOADED SUCCESSFULLY")
-        print("Input shape:", _model.input_shape)
-        print("Output shape:", _model.output_shape)
+        if TORCHSCRIPT_MODEL_PATH.exists():
+            print(f"Loading high-performance TorchScript model: {TORCHSCRIPT_MODEL_PATH}")
+            _model = torch.jit.load(str(TORCHSCRIPT_MODEL_PATH), map_location="cpu")
+            _model.eval()
+            _model_type = "torchscript"
+            print("TORCHSCRIPT MODEL LOADED (ultra-low memory: ~240 MB)")
+        else:
+            print(f"Loading fallback Keras 3 model: {KERAS3_MODEL_PATH}")
+            os.environ.setdefault("KERAS_BACKEND", "torch")
+            import keras
+            _model = keras.models.load_model(str(KERAS3_MODEL_PATH), compile=False)
+            _model_type = "keras"
+            print("KERAS 3 MODEL LOADED")
     return _model
 
 
@@ -131,6 +138,7 @@ def health():
         "status": "healthy",
         "message": "VehDetect AI backend is running",
         "model_loaded": loaded,
+        "model_type": _model_type,
         "classes": CLASS_NAMES
     })
 
@@ -177,8 +185,14 @@ def predict():
         image_batch = np.expand_dims(image_array, axis=0)
 
         model = get_model()
-        with torch.no_grad():
-            raw_scores = model({"image": image_batch}, training=False).detach().cpu().numpy()[0]
+        if _model_type == "torchscript":
+            tensor_batch = torch.from_numpy(image_batch)
+            with torch.inference_mode():
+                raw_scores = model(tensor_batch).detach().cpu().numpy()[0]
+        else:
+            with torch.no_grad():
+                raw_scores = model({"image": image_batch}, training=False).detach().cpu().numpy()[0]
+
         scores = [float(x) for x in raw_scores]
 
         predictions = []
